@@ -187,6 +187,7 @@ public class SpeedTestTask {
      */
     private SpeedTestMode mSpeedTestMode = SpeedTestMode.NONE;
 
+    private ProtocolHandler protocolHandler;
     /**
      * Build socket.
      *
@@ -197,6 +198,16 @@ public class SpeedTestTask {
         mRepeatWrapper = mSocketInterface.getRepeatWrapper();
         mListenerList = listenerList;
         initThreadPool();
+        // 根據需要的協議初始化相應的處理器
+        switch (socketInterface.getProtocol()) {
+            case "http":
+            case "https":
+                protocolHandler = new HttpProtocolHandler();
+                break;
+            case "ftp":
+                protocolHandler = new FtpProtocolHandler();
+                break;
+        }
     }
 
     /**
@@ -240,53 +251,15 @@ public class SpeedTestTask {
     public void startDownloadRequest(final String uri) {
 
         mSpeedTestMode = SpeedTestMode.DOWNLOAD;
-
         mForceCloseSocket = false;
         mErrorDispatched = false;
 
         try {
             final URL url = new URL(uri);
-
             mProtocol = url.getProtocol();
+            // 使用協議處理策略
+            protocolHandler.handleRequest(uri, url, this);
 
-            switch (mProtocol) {
-                case "http":
-                case "https":
-                    String downloadRequest;
-
-                    if (mProxyUrl != null) {
-                        this.mHostname = mProxyUrl.getHost();
-                        this.mPort = mProxyUrl.getPort() != -1 ? mProxyUrl.getPort() : 8080;
-                        downloadRequest = "GET " + uri + " HTTP/1.1\r\n" + "Host: " + url.getHost() +
-                                "\r\nProxy-Connection: Keep-Alive" + "\r\n\r\n";
-                    } else {
-                        this.mHostname = url.getHost();
-                        if (url.getProtocol().equals("http")) {
-                            this.mPort = url.getPort() != -1 ? url.getPort() : 80;
-                        } else {
-                            this.mPort = url.getPort() != -1 ? url.getPort() : 443;
-                        }
-                        downloadRequest = "GET " + uri + " HTTP/1.1\r\n" + "Host: " + url.getHost() + "\r\n\r\n";
-                    }
-                    writeDownload(downloadRequest.getBytes());
-                    break;
-                case "ftp":
-                    final String userInfo = url.getUserInfo();
-                    String user = SpeedTestConst.FTP_DEFAULT_USER;
-                    String pwd = SpeedTestConst.FTP_DEFAULT_PASSWORD;
-
-                    if (userInfo != null && userInfo.indexOf(':') != -1) {
-                        user = userInfo.substring(0, userInfo.indexOf(':'));
-                        pwd = userInfo.substring(userInfo.indexOf(':') + 1);
-                    }
-                    startFtpDownload(uri, user, pwd);
-                    break;
-                default:
-                    SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
-                            SpeedTestError.UNSUPPORTED_PROTOCOL,
-                            "unsupported protocol");
-                    break;
-            }
         } catch (MalformedURLException e) {
             SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
                     SpeedTestError.MALFORMED_URI,
