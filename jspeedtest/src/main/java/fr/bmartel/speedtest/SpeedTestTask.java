@@ -274,35 +274,37 @@ public class SpeedTestTask {
      * @param fileSizeOctet file size to upload in octet
      */
     public void startUploadRequest(final String uri, final int fileSizeOctet) {
-
         mSpeedTestMode = SpeedTestMode.UPLOAD;
-
         mForceCloseSocket = false;
         mErrorDispatched = false;
 
         try {
             final URL url = new URL(uri);
-
-            switch (url.getProtocol()) {
-                case "http":
-                case "https":
-                    writeUpload(uri, fileSizeOctet);
-                    break;
-                case "ftp":
-                    startFtpUpload(uri, fileSizeOctet);
-                    break;
-                default:
-                    SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
-                            SpeedTestError.UNSUPPORTED_PROTOCOL,
-                            "unsupported protocol");
-                    break;
-            }
+            handleUploadRequest(url, uri, fileSizeOctet);
         } catch (MalformedURLException e) {
             SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
                     SpeedTestError.MALFORMED_URI,
                     e.getMessage());
         }
     }
+
+    private void handleUploadRequest(URL url, String uri, int fileSizeOctet) {
+        switch (url.getProtocol()) {
+            case "http":
+            case "https":
+                writeUpload(uri, fileSizeOctet);
+                break;
+            case "ftp":
+                startFtpUpload(uri, fileSizeOctet);
+                break;
+            default:
+                SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
+                        SpeedTestError.UNSUPPORTED_PROTOCOL,
+                        "unsupported protocol");
+                break;
+        }
+    }
+
 
     /**
      * shutdown executors to release threads.
