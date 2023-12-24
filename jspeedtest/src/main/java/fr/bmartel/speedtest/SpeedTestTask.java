@@ -1253,9 +1253,7 @@ public class SpeedTestTask {
      * @param fileSizeOctet file size in octet
      */
     public void startFtpUpload(final String uri, final int fileSizeOctet) {
-
         mSpeedTestMode = SpeedTestMode.UPLOAD;
-
         mUploadFileSize = new BigDecimal(fileSizeOctet);
         mForceCloseSocket = false;
         mErrorDispatched = false;
@@ -1278,165 +1276,164 @@ public class SpeedTestTask {
 
             final String finalUser = user;
             final String finalPwd = pwd;
-            mWriteExecutorService.execute(new Runnable() {
-                @Override
-                public void run() {
+            mWriteExecutorService.execute(() -> {
+                FTPClient ftpClient = new FTPClient();
+                RandomGen randomGen = new RandomGen();
+                RandomAccessFile uploadFile = null;
 
-                    final FTPClient ftpClient = new FTPClient();
-                    final RandomGen randomGen = new RandomGen();
+                try {
+                    setupFtpConnection(ftpClient, url, finalUser, finalPwd);
 
-                    RandomAccessFile uploadFile = null;
+                    byte[] fileContent = generateFileContent(fileSizeOctet, randomGen);
 
-                    try {
-                        ftpClient.connect(url.getHost(), url.getPort() != -1 ? url.getPort() : 21);
-                        ftpClient.login(finalUser, finalPwd);
-                        if (mSocketInterface.getFtpMode() == FtpMode.PASSIVE) {
-                            ftpClient.enterLocalPassiveMode();
-                        } else {
-                            ftpClient.enterLocalActiveMode();
-                        }
-                        ftpClient.setFileType(FTP.BINARY_FILE_TYPE);
+                    performFtpUpload(ftpClient, url, uploadFile, fileContent);
 
-                        byte[] fileContent = new byte[]{};
+                    handleFtpUploadCompletion();
 
-                        if (mSocketInterface.getUploadStorageType() == UploadStorageType.RAM_STORAGE) {
-                            /* generate a file with size of fileSizeOctet octet */
-                            fileContent = randomGen.generateRandomArray(fileSizeOctet);
-                        } else {
-                            uploadFile = randomGen.generateRandomFile(fileSizeOctet);
-                            uploadFile.seek(0);
-                        }
-
-                        mFtpOutputstream = ftpClient.storeFileStream(url.getPath());
-
-                        if (mFtpOutputstream != null) {
-
-                            InitializeFileSize();
-
-                            final int uploadChunkSize = mSocketInterface.getUploadChunkSize();
-
-                            final int step = fileSizeOctet / uploadChunkSize;
-                            final int remain = fileSizeOctet % uploadChunkSize;
-
-                            mTimeStart = System.nanoTime();
-                            mTimeComputeStart = System.nanoTime();
-                            mTimeEnd = 0;
-
-                            if (mRepeatWrapper.isFirstUpload()) {
-                                mRepeatWrapper.setFirstUploadRepeat(false);
-                                mRepeatWrapper.setStartDate(mTimeStart);
-                            }
-
-                            if (mRepeatWrapper.isRepeatUpload()) {
-                                mRepeatWrapper.updatePacketSize(mUploadFileSize);
-                            }
-
-                            if (mForceCloseSocket) {
-                                mFtpOutputstream.close();
-                                mReportInterval = false;
-                                if (!mRepeatWrapper.isRepeatUpload()) {
-                                    closeExecutors();
-                                }
-                                SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, "");
-                            } else {
-                                for (int i = 0; i < step; i++) {
-
-
-                                    final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(), fileContent, uploadFile, mUploadTempFileSize, uploadChunkSize);
-
-                                    mFtpOutputstream.write(chunk, 0, uploadChunkSize);
-
-                                    mUploadTempFileSize += uploadChunkSize;
-                                    mUlComputationTempFileSize += uploadChunkSize;
-
-                                    if (mRepeatWrapper.isRepeatUpload()) {
-                                        mRepeatWrapper.updateTempPacketSize(uploadChunkSize);
-                                    }
-
-                                    if (!mReportInterval) {
-
-                                        final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
-
-                                        for (int j = 0; j < mListenerList.size(); j++) {
-                                            mListenerList.get(j).onProgress(report.getProgressPercent(), report);
-                                        }
-                                    }
-                                }
-
-                                if (remain != 0) {
-
-                                    final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(), fileContent, uploadFile, mUploadTempFileSize, remain);
-
-                                    mFtpOutputstream.write(chunk, 0, remain);
-
-                                    mUploadTempFileSize += remain;
-                                    mUlComputationTempFileSize += remain;
-
-                                    if (mRepeatWrapper.isRepeatUpload()) {
-                                        mRepeatWrapper.updateTempPacketSize(remain);
-                                    }
-                                }
-                                if (!mReportInterval) {
-                                    final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
-
-                                    for (int j = 0; j < mListenerList.size(); j++) {
-                                        mListenerList.get(j).onProgress(SpeedTestConst.PERCENT_MAX.floatValue(), report);
-
-                                    }
-                                }
-                                mTimeEnd = System.nanoTime();
-                                mFtpOutputstream.close();
-                                mReportInterval = false;
-
-                                if (!mRepeatWrapper.isRepeatUpload()) {
-                                    closeExecutors();
-                                }
-
-                                final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
-
-                                for (int i = 0; i < mListenerList.size(); i++) {
-                                    mListenerList.get(i).onCompletion(report);
-                                }
-                            }
-                        } else {
-                            mReportInterval = false;
-                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, "cant create stream" + " " + "from uri " + uri + " with reply code : " + ftpClient.getReplyCode());
-                        }
-                    } catch (SocketTimeoutException e) {
-                        //e.printStackTrace();
-                        mReportInterval = false;
-                        mErrorDispatched = true;
-                        if (!mForceCloseSocket) {
-                            SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, SpeedTestConst.SOCKET_WRITE_ERROR);
-                        } else {
-                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
-                        }
-                        closeSocket();
-                        closeExecutors();
-                    } catch (IOException e) {
-                        //e.printStackTrace();
-                        mReportInterval = false;
-                        mErrorDispatched = true;
-                        SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
-                        closeExecutors();
-                    } finally {
-                        mErrorDispatched = false;
-                        disconnectFtp(ftpClient);
-                        if (uploadFile != null) {
-                            try {
-                                uploadFile.close();
-                                randomGen.deleteFile();
-                            } catch (IOException e) {
-                                //e.printStackTrace();
-                            }
-                        }
-                    }
+                } catch (IOException e) {
+                    mReportInterval = false;
+                    mErrorDispatched = true;
+                    SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
+                    closeExecutors();
+                } finally {
+                    mErrorDispatched = false;
+                    disconnectFtp(ftpClient);
+                    closeUploadFile(uploadFile, randomGen);
                 }
             });
         } catch (MalformedURLException e) {
             SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, SpeedTestError.MALFORMED_URI, e.getMessage());
         }
     }
+
+    private void setupFtpConnection(FTPClient ftpClient, URL url, String user, String password) throws IOException {
+        ftpClient.connect(url.getHost(), url.getPort() != -1 ? url.getPort() : 21);
+        ftpClient.login(user, password);
+
+        if (mSocketInterface.getFtpMode() == FtpMode.PASSIVE) {
+            ftpClient.enterLocalPassiveMode();
+        } else {
+            ftpClient.enterLocalActiveMode();
+        }
+
+        ftpClient.setFileType(FTP.BINARY_FILE_TYPE);
+
+        initializeUploadCounters();
+
+        mFtpOutputstream = ftpClient.storeFileStream(url.getPath());
+
+        if (mFtpOutputstream == null) {
+            mReportInterval = false;
+            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, "cant create stream from uri " + url + " with reply code : " + ftpClient.getReplyCode());
+            closeExecutors();
+        }
+    }
+
+    private void initializeUploadCounters() {
+        InitializeFileSize();
+        mTimeStart = System.nanoTime();
+        mTimeComputeStart = System.nanoTime();
+        mTimeEnd = 0;
+
+        if (mRepeatWrapper.isFirstUpload()) {
+            mRepeatWrapper.setFirstUploadRepeat(false);
+            mRepeatWrapper.setStartDate(mTimeStart);
+        }
+
+        if (mRepeatWrapper.isRepeatUpload()) {
+            mRepeatWrapper.updatePacketSize(mUploadFileSize);
+        }
+    }
+
+    private byte[] generateFileContent(int fileSizeOctet, RandomGen randomGen) {
+        byte[] fileContent = new byte[]{};
+
+        if (mSocketInterface.getUploadStorageType() == UploadStorageType.RAM_STORAGE) {
+            fileContent = randomGen.generateRandomArray(fileSizeOctet);
+        } else {
+            uploadFile = randomGen.generateRandomFile(fileSizeOctet);
+            uploadFile.seek(0);
+        }
+
+        return fileContent;
+    }
+
+    private void performFtpUpload(FTPClient ftpClient, URL url, RandomAccessFile uploadFile, byte[] fileContent) throws IOException {
+        final int uploadChunkSize = mSocketInterface.getUploadChunkSize();
+        final int step = fileSizeOctet / uploadChunkSize;
+        final int remain = fileSizeOctet % uploadChunkSize;
+
+        for (int i = 0; i < step; i++) {
+            final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(), fileContent, uploadFile, mUploadTempFileSize, uploadChunkSize);
+
+            writeFtpChunk(ftpClient, chunk, uploadChunkSize);
+        }
+
+        if (remain != 0) {
+            final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(), fileContent, uploadFile, mUploadTempFileSize, remain);
+
+            writeFtpChunk(ftpClient, chunk, remain);
+        }
+    }
+
+    private void writeFtpChunk(FTPClient ftpClient, byte[] chunk, int size) throws IOException {
+        mFtpOutputstream.write(chunk, 0, size);
+
+        mUploadTempFileSize += size;
+        mUlComputationTempFileSize += size;
+
+        if (mRepeatWrapper.isRepeatUpload()) {
+            mRepeatWrapper.updateTempPacketSize(size);
+        }
+
+        if (!mReportInterval) {
+            dispatchUploadProgressUpdate();
+        }
+    }
+
+    private void dispatchUploadProgressUpdate() {
+        final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
+
+        for (int j = 0; j < mListenerList.size(); j++) {
+            mListenerList.get(j).onProgress(report.getProgressPercent(), report);
+        }
+    }
+
+    private void handleFtpUploadCompletion() {
+        if (!mReportInterval) {
+            final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
+
+            for (int j = 0; j < mListenerList.size(); j++) {
+                mListenerList.get(j).onProgress(SpeedTestConst.PERCENT_MAX.floatValue(), report);
+            }
+        }
+
+        mTimeEnd = System.nanoTime();
+        mFtpOutputstream.close();
+        mReportInterval = false;
+
+        if (!mRepeatWrapper.isRepeatUpload()) {
+            closeExecutors();
+        }
+
+        final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
+
+        for (int i = 0; i < mListenerList.size(); i++) {
+            mListenerList.get(i).onCompletion(report);
+        }
+    }
+
+    private void closeUploadFile(RandomAccessFile uploadFile, RandomGen randomGen) {
+        if (uploadFile != null) {
+            try {
+                uploadFile.close();
+                randomGen.deleteFile();
+            } catch (IOException e) {
+                // handle exception
+            }
+        }
+    }
+
 
     /**
      * Close socket streams and mSocket object.
