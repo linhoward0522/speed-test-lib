@@ -498,64 +498,84 @@ public class SpeedTestTask {
      * @param uploadSize upload package size (if !download)
      */
     private void connectAndExecuteTask(final Runnable task, final boolean download, final int uploadSize) {
+        closeAndRecreateSocket();
 
-        // close mSocket before recreating it
+        try {
+            setupSocket();
+            executeReadTask(download, uploadSize);
+            executeWriteTask(task);
+        } catch (IOException e) {
+            handleSocketIOException(e);
+        }
+    }
+
+    private void closeAndRecreateSocket() {
         if (mSocket != null) {
             closeSocket();
         }
-        try {
-            if ("https".equals(mProtocol)) {
-                final SSLSocketFactory ssf = (SSLSocketFactory) SSLSocketFactory.getDefault();
-                mSocket = ssf.createSocket();
+    }
+
+    private void setupSocket() throws IOException {
+        if ("https".equals(mProtocol)) {
+            setupSSLSocket();
+        } else {
+            mSocket = new Socket();
+        }
+
+        configureSocketParameters();
+        establishConnection();
+    }
+
+    private void setupSSLSocket() throws IOException {
+        final SSLSocketFactory ssf = (SSLSocketFactory) SSLSocketFactory.getDefault();
+        mSocket = ssf.createSocket();
+    }
+
+    private void configureSocketParameters() throws SocketException {
+        mSocket.setReuseAddress(true);
+        mSocket.setKeepAlive(true);
+        configureSocketTimeout();
+    }
+
+    private void configureSocketTimeout() throws SocketException {
+        if (mSocketInterface.getSocketTimeout() != 0 && download) {
+            mSocket.setSoTimeout(mSocketInterface.getSocketTimeout());
+        }
+    }
+
+    private void establishConnection() throws IOException {
+        mSocket.connect(new InetSocketAddress(mHostname, mPort));
+    }
+
+    private void executeReadTask(final boolean download, final int uploadSize) {
+        executeTaskInExecutor(() -> {
+            if (download) {
+                startSocketDownloadTask(mProtocol, mHostname);
             } else {
-                mSocket = new Socket();
+                startSocketUploadTask(mHostname, uploadSize);
             }
+        }, mReadExecutorService);
+    }
 
-            if (mSocketInterface.getSocketTimeout() != 0 && download) {
-                mSocket.setSoTimeout(mSocketInterface.getSocketTimeout());
+    private void executeWriteTask(final Runnable task) {
+        executeTaskInExecutor(() -> {
+            if (task != null) {
+                task.run();
             }
+        }, mWriteExecutorService);
+    }
 
-            /* establish mSocket parameters */
-            mSocket.setReuseAddress(true);
+    private void executeTaskInExecutor(final Runnable task, final ExecutorService executorService) {
+        if (executorService == null || executorService.isShutdown()) {
+            executorService = Executors.newSingleThreadExecutor();
+        }
 
-            mSocket.setKeepAlive(true);
+        executorService.execute(task);
+    }
 
-            mSocket.connect(new InetSocketAddress(mHostname, mPort));
-
-            if (mReadExecutorService == null || mReadExecutorService.isShutdown()) {
-                mReadExecutorService = Executors.newSingleThreadExecutor();
-            }
-
-            mReadExecutorService.execute(new Runnable() {
-
-                @Override
-                public void run() {
-
-                    if (download) {
-                        startSocketDownloadTask(mProtocol, mHostname);
-                    } else {
-                        startSocketUploadTask(mHostname, uploadSize);
-                    }
-                }
-            });
-
-            if (mWriteExecutorService == null || mWriteExecutorService.isShutdown()) {
-                mWriteExecutorService = Executors.newSingleThreadExecutor();
-            }
-
-            mWriteExecutorService.execute(new Runnable() {
-                @Override
-                public void run() {
-                    if (task != null) {
-                        task.run();
-                    }
-                }
-            });
-
-        } catch (IOException e) {
-            if (!mErrorDispatched) {
-                SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
-            }
+    private void handleSocketIOException(IOException e) {
+        if (!mErrorDispatched) {
+            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
         }
     }
 
