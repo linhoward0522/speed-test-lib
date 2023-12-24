@@ -776,72 +776,102 @@ public class SpeedTestTask {
      * @param size     upload packet size
      */
     private void startSocketUploadTask(final String hostname, final int size) {
-
         try {
-            final HttpFrame frame = new HttpFrame();
+            HttpFrame frame = new HttpFrame();
+            HttpStates httpStates = frame.parseHttp(mSocket.getInputStream());
 
-            final HttpStates httpStates = frame.parseHttp(mSocket.getInputStream());
-
-            if (httpStates == HttpStates.HTTP_FRAME_OK) {
-
-                if (frame.getStatusCode() == SpeedTestConst.HTTP_OK && frame.getReasonPhrase().equalsIgnoreCase("ok")) {
-
-                    mTimeEnd = System.nanoTime();
-                    mReportInterval = false;
-
-                    finishTask();
-
-                    final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
-
-                    for (int i = 0; i < mListenerList.size(); i++) {
-                        mListenerList.get(i).onCompletion(report);
-                    }
-
-                } else if ((frame.getStatusCode() == 301 || frame.getStatusCode() == 302 || frame.getStatusCode() == 307) && frame.getHeaders().containsKey("location")) {
-                    // redirect to Location
-                    final String location = frame.getHeaders().get("location");
-
-                    if (location.charAt(0) == '/') {
-                        mReportInterval = false;
-                        finishTask();
-                        startUploadRequest("http://" + hostname + location, size);
-                    } else if (location.startsWith("https")) {
-                        //unsupported protocol
-                        mReportInterval = false;
-                        for (int i = 0; i < mListenerList.size(); i++) {
-                            mListenerList.get(i).onError(SpeedTestError.UNSUPPORTED_PROTOCOL, "unsupported protocol :" + " " + "https");
-                        }
-                        finishTask();
-                    } else {
-                        mReportInterval = false;
-                        finishTask();
-                        startUploadRequest(location, size);
-                    }
-                } else {
-                    mReportInterval = false;
-
-                    for (int i = 0; i < mListenerList.size(); i++) {
-                        mListenerList.get(i).onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code" + " " + frame.getStatusCode());
-                    }
-                    finishTask();
-                }
-                return;
-            }
-            closeSocket();
-            if (!mErrorDispatched && !mForceCloseSocket) {
-                for (int i = 0; i < mListenerList.size(); i++) {
-                    mListenerList.get(i).onError(SpeedTestError.SOCKET_ERROR, "mSocket error");
-                }
-            }
-            closeExecutors();
+            handleHttpResponse(frame, httpStates, hostname, size);
         } catch (IOException | InterruptedException e) {
-            mReportInterval = false;
-            if (!mErrorDispatched) {
-                catchError(e.getMessage());
-            }
+            handleIOException(e);
         }
+
         mErrorDispatched = false;
     }
+
+    private void handleHttpResponse(HttpFrame frame, HttpStates httpStates, String hostname, int size) {
+        if (httpStates == HttpStates.HTTP_FRAME_OK) {
+            handleHttpFrameOk(frame, hostname, size);
+        } else {
+            handleHttpFrameError();
+        }
+    }
+
+    private void handleHttpFrameOk(HttpFrame frame, String hostname, int size) {
+        if (frame.getStatusCode() == SpeedTestConst.HTTP_OK && frame.getReasonPhrase().equalsIgnoreCase("ok")) {
+            handleSuccessfulUploadCompletion();
+        } else if (isRedirection(frame)) {
+            handleRedirection(frame, hostname, size);
+        } else {
+            handleError(frame.getStatusCode());
+        }
+    }
+
+    private boolean isRedirection(HttpFrame frame) {
+        return frame.getStatusCode() == 301 || frame.getStatusCode() == 302 || frame.getStatusCode() == 307;
+    }
+
+    private void handleRedirection(HttpFrame frame, String hostname, int size) {
+        String location = frame.getHeaders().get("location");
+
+        if (location.charAt(0) == '/') {
+            handleRedirectionToPath(hostname, size, location);
+        } else if (location.startsWith("https")) {
+            handleUnsupportedProtocolError("https");
+        } else {
+            startUploadRequest(location, size);
+        }
+    }
+
+    private void handleRedirectionToPath(String hostname, int size, String location) {
+        mReportInterval = false;
+        finishTask();
+        startUploadRequest("http://" + hostname + location, size);
+    }
+
+    private void handleUnsupportedProtocolError(String protocol) {
+        mReportInterval = false;
+        for (ISpeedTestListener listener : mListenerList) {
+            listener.onError(SpeedTestError.UNSUPPORTED_PROTOCOL, "Unsupported protocol: " + protocol);
+        }
+        finishTask();
+    }
+
+    private void handleError(int statusCode) {
+        mReportInterval = false;
+        for (ISpeedTestListener listener : mListenerList) {
+            listener.onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code: " + statusCode);
+        }
+        finishTask();
+    }
+
+    private void handleHttpFrameError() {
+        closeSocket();
+        if (!mErrorDispatched && !mForceCloseSocket) {
+            for (ISpeedTestListener listener : mListenerList) {
+                listener.onError(SpeedTestError.SOCKET_ERROR, "Socket error");
+            }
+        }
+        closeExecutors();
+    }
+
+    private void handleIOException(Exception e) {
+        mReportInterval = false;
+        if (!mErrorDispatched) {
+            catchError(e.getMessage());
+        }
+    }
+
+    private void handleSuccessfulUploadCompletion() {
+        mTimeEnd = System.nanoTime();
+        mReportInterval = false;
+        finishTask();
+
+        SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
+        for (ISpeedTestListener listener : mListenerList) {
+            listener.onCompletion(report);
+        }
+    }
+
 
 
     /**
