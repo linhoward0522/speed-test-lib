@@ -262,9 +262,7 @@ public class SpeedTestTask {
             protocolHandler.handleRequest(uri, url, this);
 
         } catch (MalformedURLException e) {
-            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
-                    SpeedTestError.MALFORMED_URI,
-                    e.getMessage());
+            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, SpeedTestError.MALFORMED_URI, e.getMessage());
         }
     }
 
@@ -283,9 +281,7 @@ public class SpeedTestTask {
             final URL url = new URL(uri);
             handleUploadRequest(url, uri, fileSizeOctet);
         } catch (MalformedURLException e) {
-            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
-                    SpeedTestError.MALFORMED_URI,
-                    e.getMessage());
+            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, SpeedTestError.MALFORMED_URI, e.getMessage());
         }
     }
 
@@ -299,9 +295,7 @@ public class SpeedTestTask {
                 startFtpUpload(uri, fileSizeOctet);
                 break;
             default:
-                SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
-                        SpeedTestError.UNSUPPORTED_PROTOCOL,
-                        "unsupported protocol");
+                SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, SpeedTestError.UNSUPPORTED_PROTOCOL, "unsupported protocol");
                 break;
         }
     }
@@ -355,11 +349,7 @@ public class SpeedTestTask {
     }
 
     private void performUploadChunk(int chunkSize, byte[] body) throws IOException {
-        final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(),
-                body,
-                uploadFile,
-                mUploadTempFileSize,
-                chunkSize);
+        final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(), body, uploadFile, mUploadTempFileSize, chunkSize);
 
         if (writeFlushSocket(chunk) != 0) {
             throw new SocketTimeoutException();
@@ -452,12 +442,9 @@ public class SpeedTestTask {
     private String prepareUploadHeader(String uri, int fileSizeOctet) {
         String head;
         if (mProxyUrl != null) {
-            head = "POST " + uri + " HTTP/1.1\r\n" + "Host: " + mHostname +
-                    "\r\nAccept: " + "*/*\r\nContent-Length: " + fileSizeOctet +
-                    "\r\nProxy-Connection: Keep-Alive" + "\r\n\r\n";
+            head = "POST " + uri + " HTTP/1.1\r\n" + "Host: " + mHostname + "\r\nAccept: " + "*/*\r\nContent-Length: " + fileSizeOctet + "\r\nProxy-Connection: Keep-Alive" + "\r\n\r\n";
         } else {
-            head = "POST " + uri + " HTTP/1.1\r\n" + "Host: " + mHostname +
-                    "\r\nAccept: " + "*/*\r\nContent-Length: " + fileSizeOctet + "\r\n\r\n";
+            head = "POST " + uri + " HTTP/1.1\r\n" + "Host: " + mHostname + "\r\nAccept: " + "*/*\r\nContent-Length: " + fileSizeOctet + "\r\n\r\n";
         }
         return head;
     }
@@ -627,15 +614,11 @@ public class SpeedTestTask {
     }
 
     private void handleHttpResponse(HttpFrame httpFrame, String protocol, String hostname) throws IOException, InterruptedException {
-        if (httpFrame.getStatusCode() == SpeedTestConst.HTTP_OK &&
-                httpFrame.getReasonPhrase().equalsIgnoreCase("ok")) {
+        if (httpFrame.getStatusCode() == SpeedTestConst.HTTP_OK && httpFrame.getReasonPhrase().equalsIgnoreCase("ok")) {
 
             handleOkResponse(httpFrame);
 
-        } else if ((httpFrame.getStatusCode() == 301 ||
-                httpFrame.getStatusCode() == 302 ||
-                httpFrame.getStatusCode() == 307) &&
-                httpFrame.getHeaders().containsKey("location")) {
+        } else if ((httpFrame.getStatusCode() == 301 || httpFrame.getStatusCode() == 302 || httpFrame.getStatusCode() == 307) && httpFrame.getHeaders().containsKey("location")) {
 
             handleRedirectResponse(httpFrame, protocol, hostname);
 
@@ -672,8 +655,7 @@ public class SpeedTestTask {
         mReportInterval = false;
 
         for (ISpeedTestListener listener : mListenerList) {
-            listener.onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code " +
-                    httpFrame.getStatusCode());
+            listener.onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code " + httpFrame.getStatusCode());
         }
 
         finishTask();
@@ -750,31 +732,42 @@ public class SpeedTestTask {
      * @throws IOException mSocket io exception
      */
     private void downloadReadingLoop() throws IOException {
+        byte[] buffer = new byte[SpeedTestConst.READ_BUFFER_SIZE];
+        int bytesRead;
 
-        final byte[] buffer = new byte[SpeedTestConst.READ_BUFFER_SIZE];
-        int read;
+        while ((bytesRead = mSocket.getInputStream().read(buffer)) != -1) {
+            updateDownloadCounters(bytesRead);
 
-        while ((read = mSocket.getInputStream().read(buffer)) != -1) {
+            notifyProgress();
 
-            mDownloadTemporaryPacketSize += read;
-            mDlComputationTempPacketSize += read;
-
-            if (mRepeatWrapper.isRepeatDownload()) {
-                mRepeatWrapper.updateTempPacketSize(read);
-            }
-
-            if (!mReportInterval) {
-                final SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
-                for (int i = 0; i < mListenerList.size(); i++) {
-                    mListenerList.get(i).onProgress(report.getProgressPercent(), report);
-                }
-            }
-
-            if (mDownloadTemporaryPacketSize == mDownloadPckSize.longValueExact()) {
+            if (downloadComplete()) {
                 break;
             }
         }
     }
+
+    private void updateDownloadCounters(int bytesRead) {
+        mDownloadTemporaryPacketSize += bytesRead;
+        mDlComputationTempPacketSize += bytesRead;
+
+        if (mRepeatWrapper.isRepeatDownload()) {
+            mRepeatWrapper.updateTempPacketSize(bytesRead);
+        }
+    }
+
+    private void notifyProgress() {
+        if (!mReportInterval) {
+            SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
+            for (ISpeedTestListener listener : mListenerList) {
+                listener.onProgress(report.getProgressPercent(), report);
+            }
+        }
+    }
+
+    private boolean downloadComplete() {
+        return mDownloadTemporaryPacketSize == mDownloadPckSize.longValueExact();
+    }
+
 
     /**
      * start upload writing task.
@@ -804,10 +797,7 @@ public class SpeedTestTask {
                         mListenerList.get(i).onCompletion(report);
                     }
 
-                } else if ((frame.getStatusCode() == 301 ||
-                        frame.getStatusCode() == 302 ||
-                        frame.getStatusCode() == 307) &&
-                        frame.getHeaders().containsKey("location")) {
+                } else if ((frame.getStatusCode() == 301 || frame.getStatusCode() == 302 || frame.getStatusCode() == 307) && frame.getHeaders().containsKey("location")) {
                     // redirect to Location
                     final String location = frame.getHeaders().get("location");
 
@@ -819,9 +809,7 @@ public class SpeedTestTask {
                         //unsupported protocol
                         mReportInterval = false;
                         for (int i = 0; i < mListenerList.size(); i++) {
-                            mListenerList.get(i).onError(SpeedTestError.UNSUPPORTED_PROTOCOL, "unsupported protocol :" +
-                                    " " +
-                                    "https");
+                            mListenerList.get(i).onError(SpeedTestError.UNSUPPORTED_PROTOCOL, "unsupported protocol :" + " " + "https");
                         }
                         finishTask();
                     } else {
@@ -833,8 +821,7 @@ public class SpeedTestTask {
                     mReportInterval = false;
 
                     for (int i = 0; i < mListenerList.size(); i++) {
-                        mListenerList.get(i).onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code" +
-                                " " + frame.getStatusCode());
+                        mListenerList.get(i).onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code" + " " + frame.getStatusCode());
                     }
                     finishTask();
                 }
@@ -875,13 +862,11 @@ public class SpeedTestTask {
                             throw new SocketTimeoutException();
                         }
                     } catch (SocketTimeoutException e) {
-                        SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, SpeedTestConst
-                                .SOCKET_WRITE_ERROR);
+                        SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, SpeedTestConst.SOCKET_WRITE_ERROR);
                         closeSocket();
                         closeExecutors();
                     } catch (IOException e) {
-                        SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket,
-                                mListenerList, e.getMessage());
+                        SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
                         closeExecutors();
                     }
                 }
@@ -999,8 +984,7 @@ public class SpeedTestTask {
 
         switch (mSocketInterface.getComputationMethod()) {
             case MEDIAN_ALL_TIME:
-                BigDecimal dividerAllTime = new BigDecimal(currentTime - mTimeComputeStart)
-                        .divide(SpeedTestConst.NANO_DIVIDER, scale, roundingMode);
+                BigDecimal dividerAllTime = new BigDecimal(currentTime - mTimeComputeStart).divide(SpeedTestConst.NANO_DIVIDER, scale, roundingMode);
 
                 if (shallCalculateTransferRate(currentTime) && dividerAllTime.compareTo(BigDecimal.ZERO) != 0) {
                     transferRateOps = temporaryPacketSize.divide(dividerAllTime, scale, roundingMode);
@@ -1008,11 +992,9 @@ public class SpeedTestTask {
                 break;
             case MEDIAN_INTERVAL:
 
-                final BigDecimal tempPacket = (mode == SpeedTestMode.DOWNLOAD) ? new BigDecimal
-                        (mDlComputationTempPacketSize) : new BigDecimal(mUlComputationTempFileSize);
+                final BigDecimal tempPacket = (mode == SpeedTestMode.DOWNLOAD) ? new BigDecimal(mDlComputationTempPacketSize) : new BigDecimal(mUlComputationTempFileSize);
 
-                BigDecimal dividerMedian = new BigDecimal(currentTime - mTimeComputeStart)
-                        .divide(SpeedTestConst.NANO_DIVIDER, scale, roundingMode);
+                BigDecimal dividerMedian = new BigDecimal(currentTime - mTimeComputeStart).divide(SpeedTestConst.NANO_DIVIDER, scale, roundingMode);
 
                 if (shallCalculateTransferRate(currentTime) && dividerMedian.compareTo(BigDecimal.ZERO) != 0) {
                     transferRateOps = tempPacket.divide(dividerMedian, scale, roundingMode);
@@ -1036,13 +1018,9 @@ public class SpeedTestTask {
             report = mRepeatWrapper.getRepeatReport(scale, roundingMode, mode, currentTime, transferRateOps);
         } else {
             if (totalPacketSize.compareTo(BigDecimal.ZERO) != 0) {
-                percent = temporaryPacketSize.multiply(SpeedTestConst.PERCENT_MAX).divide(totalPacketSize, scale,
-                        roundingMode);
+                percent = temporaryPacketSize.multiply(SpeedTestConst.PERCENT_MAX).divide(totalPacketSize, scale, roundingMode);
             }
-            report = new SpeedTestReport(mode, percent.floatValue(),
-                    mTimeStart, currentTime, temporaryPacketSize.longValueExact(), totalPacketSize.longValueExact(),
-                    transferRateOps, transferRateBitps,
-                    1);
+            report = new SpeedTestReport(mode, percent.floatValue(), mTimeStart, currentTime, temporaryPacketSize.longValueExact(), totalPacketSize.longValueExact(), transferRateOps, transferRateBitps, 1);
         }
         return report;
     }
@@ -1097,10 +1075,7 @@ public class SpeedTestTask {
      * @param user     ftp username
      * @param password ftp password
      */
-    public void startFtpDownload(
-            final String uri,
-            final String user,
-            final String password) {
+    public void startFtpDownload(final String uri, final String user, final String password) {
 
         mSpeedTestMode = SpeedTestMode.DOWNLOAD;
 
@@ -1192,9 +1167,7 @@ public class SpeedTestTask {
 
                         } else {
                             mReportInterval = false;
-                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket,
-                                    mListenerList, "cant create stream " +
-                                            "from uri " + uri + " with reply code : " + ftpclient.getReplyCode());
+                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, "cant create stream " + "from uri " + uri + " with reply code : " + ftpclient.getReplyCode());
                         }
 
                         if (!mRepeatWrapper.isRepeatDownload()) {
@@ -1212,9 +1185,7 @@ public class SpeedTestTask {
                 }
             });
         } catch (MalformedURLException e) {
-            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
-                    SpeedTestError.MALFORMED_URI,
-                    e.getMessage());
+            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, SpeedTestError.MALFORMED_URI, e.getMessage());
         }
     }
 
@@ -1225,9 +1196,7 @@ public class SpeedTestTask {
      * @param uri           upload uri
      * @param fileSizeOctet file size in octet
      */
-    public void startFtpUpload(
-            final String uri,
-            final int fileSizeOctet) {
+    public void startFtpUpload(final String uri, final int fileSizeOctet) {
 
         mSpeedTestMode = SpeedTestMode.UPLOAD;
 
@@ -1317,12 +1286,7 @@ public class SpeedTestTask {
                                 for (int i = 0; i < step; i++) {
 
 
-                                    final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface
-                                                    .getUploadStorageType(),
-                                            fileContent,
-                                            uploadFile,
-                                            mUploadTempFileSize,
-                                            uploadChunkSize);
+                                    final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(), fileContent, uploadFile, mUploadTempFileSize, uploadChunkSize);
 
                                     mFtpOutputstream.write(chunk, 0, uploadChunkSize);
 
@@ -1345,12 +1309,7 @@ public class SpeedTestTask {
 
                                 if (remain != 0) {
 
-                                    final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface
-                                                    .getUploadStorageType(),
-                                            fileContent,
-                                            uploadFile,
-                                            mUploadTempFileSize,
-                                            remain);
+                                    final byte[] chunk = SpeedTestUtils.readUploadData(mSocketInterface.getUploadStorageType(), fileContent, uploadFile, mUploadTempFileSize, remain);
 
                                     mFtpOutputstream.write(chunk, 0, remain);
 
@@ -1365,8 +1324,7 @@ public class SpeedTestTask {
                                     final SpeedTestReport report = getReport(SpeedTestMode.UPLOAD);
 
                                     for (int j = 0; j < mListenerList.size(); j++) {
-                                        mListenerList.get(j).onProgress(SpeedTestConst.PERCENT_MAX.floatValue(),
-                                                report);
+                                        mListenerList.get(j).onProgress(SpeedTestConst.PERCENT_MAX.floatValue(), report);
 
                                     }
                                 }
@@ -1386,21 +1344,16 @@ public class SpeedTestTask {
                             }
                         } else {
                             mReportInterval = false;
-                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket,
-                                    mListenerList, "cant create stream" +
-                                            " " +
-                                            "from uri " + uri + " with reply code : " + ftpClient.getReplyCode());
+                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, "cant create stream" + " " + "from uri " + uri + " with reply code : " + ftpClient.getReplyCode());
                         }
                     } catch (SocketTimeoutException e) {
                         //e.printStackTrace();
                         mReportInterval = false;
                         mErrorDispatched = true;
                         if (!mForceCloseSocket) {
-                            SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, SpeedTestConst
-                                    .SOCKET_WRITE_ERROR);
+                            SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, SpeedTestConst.SOCKET_WRITE_ERROR);
                         } else {
-                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket,
-                                    mListenerList, e.getMessage());
+                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
                         }
                         closeSocket();
                         closeExecutors();
@@ -1408,8 +1361,7 @@ public class SpeedTestTask {
                         //e.printStackTrace();
                         mReportInterval = false;
                         mErrorDispatched = true;
-                        SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket,
-                                mListenerList, e.getMessage());
+                        SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
                         closeExecutors();
                     } finally {
                         mErrorDispatched = false;
@@ -1426,9 +1378,7 @@ public class SpeedTestTask {
                 }
             });
         } catch (MalformedURLException e) {
-            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList,
-                    SpeedTestError.MALFORMED_URI,
-                    e.getMessage());
+            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, SpeedTestError.MALFORMED_URI, e.getMessage());
         }
     }
 
@@ -1474,8 +1424,7 @@ public class SpeedTestTask {
         try {
             mReadExecutorService.awaitTermination(SpeedTestConst.THREADPOOL_WAIT_COMPLETION_MS, TimeUnit.MILLISECONDS);
             mWriteExecutorService.awaitTermination(SpeedTestConst.THREADPOOL_WAIT_COMPLETION_MS, TimeUnit.MILLISECONDS);
-            mReportExecutorService.awaitTermination(SpeedTestConst.THREADPOOL_WAIT_COMPLETION_MS,
-                    TimeUnit.MILLISECONDS);
+            mReportExecutorService.awaitTermination(SpeedTestConst.THREADPOOL_WAIT_COMPLETION_MS, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             //e.printStackTrace();
         }
