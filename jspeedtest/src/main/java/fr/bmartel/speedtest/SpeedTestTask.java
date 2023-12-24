@@ -975,7 +975,6 @@ public class SpeedTestTask {
      * @return speed test report
      */
     public SpeedTestReport getReport(final SpeedTestMode mode) {
-
         BigDecimal temporaryPacketSize = BigDecimal.ZERO;
         BigDecimal totalPacketSize = BigDecimal.ZERO;
 
@@ -992,60 +991,72 @@ public class SpeedTestTask {
                 break;
         }
 
-        long currentTime;
-        if (mTimeEnd == 0) {
-            currentTime = System.nanoTime();
-        } else {
-            currentTime = mTimeEnd;
-        }
+        long currentTime = (mTimeEnd == 0) ? System.nanoTime() : mTimeEnd;
 
-        BigDecimal transferRateOps = BigDecimal.ZERO;
+        BigDecimal transferRateOps = calculateTransferRate(mode, temporaryPacketSize, currentTime);
 
-        final int scale = mSocketInterface.getDefaultScale();
-        final RoundingMode roundingMode = mSocketInterface.getDefaultRoundingMode();
-
-        switch (mSocketInterface.getComputationMethod()) {
-            case MEDIAN_ALL_TIME:
-                BigDecimal dividerAllTime = new BigDecimal(currentTime - mTimeComputeStart).divide(SpeedTestConst.NANO_DIVIDER, scale, roundingMode);
-
-                if (shallCalculateTransferRate(currentTime) && dividerAllTime.compareTo(BigDecimal.ZERO) != 0) {
-                    transferRateOps = temporaryPacketSize.divide(dividerAllTime, scale, roundingMode);
-                }
-                break;
-            case MEDIAN_INTERVAL:
-
-                final BigDecimal tempPacket = (mode == SpeedTestMode.DOWNLOAD) ? new BigDecimal(mDlComputationTempPacketSize) : new BigDecimal(mUlComputationTempFileSize);
-
-                BigDecimal dividerMedian = new BigDecimal(currentTime - mTimeComputeStart).divide(SpeedTestConst.NANO_DIVIDER, scale, roundingMode);
-
-                if (shallCalculateTransferRate(currentTime) && dividerMedian.compareTo(BigDecimal.ZERO) != 0) {
-                    transferRateOps = tempPacket.divide(dividerMedian, scale, roundingMode);
-                }
-                // reset those values for the next computation
-                mDlComputationTempPacketSize = 0;
-                mUlComputationTempFileSize = 0;
-                mTimeComputeStart = System.nanoTime();
-                break;
-            default:
-                break;
-        }
-
-        final BigDecimal transferRateBitps = transferRateOps.multiply(SpeedTestConst.BIT_MULTIPLIER);
-
-        BigDecimal percent = BigDecimal.ZERO;
+        BigDecimal percent = calculatePercentage(temporaryPacketSize, totalPacketSize);
 
         SpeedTestReport report;
 
         if (mRepeatWrapper.isRepeat()) {
-            report = mRepeatWrapper.getRepeatReport(scale, roundingMode, mode, currentTime, transferRateOps);
+            report = mRepeatWrapper.getRepeatReport(mSocketInterface.getDefaultScale(), mSocketInterface.getDefaultRoundingMode(), mode, currentTime, transferRateOps);
         } else {
-            if (totalPacketSize.compareTo(BigDecimal.ZERO) != 0) {
-                percent = temporaryPacketSize.multiply(SpeedTestConst.PERCENT_MAX).divide(totalPacketSize, scale, roundingMode);
-            }
-            report = new SpeedTestReport(mode, percent.floatValue(), mTimeStart, currentTime, temporaryPacketSize.longValueExact(), totalPacketSize.longValueExact(), transferRateOps, transferRateBitps, 1);
+            report = createSpeedTestReport(mode, temporaryPacketSize, totalPacketSize, transferRateOps, percent, currentTime);
         }
+
         return report;
     }
+
+    private BigDecimal calculateTransferRate(SpeedTestMode mode, BigDecimal temporaryPacketSize, long currentTime) {
+        BigDecimal transferRateOps = BigDecimal.ZERO;
+
+        if (shallCalculateTransferRate(currentTime)) {
+            BigDecimal divider;
+            BigDecimal tempPacket;
+
+            switch (mSocketInterface.getComputationMethod()) {
+                case MEDIAN_ALL_TIME:
+                    divider = new BigDecimal(currentTime - mTimeComputeStart).divide(SpeedTestConst.NANO_DIVIDER, mSocketInterface.getDefaultScale(), mSocketInterface.getDefaultRoundingMode());
+                    tempPacket = temporaryPacketSize;
+                    break;
+                case MEDIAN_INTERVAL:
+                    tempPacket = (mode == SpeedTestMode.DOWNLOAD) ? new BigDecimal(mDlComputationTempPacketSize) : new BigDecimal(mUlComputationTempFileSize);
+                    divider = new BigDecimal(currentTime - mTimeComputeStart).divide(SpeedTestConst.NANO_DIVIDER, mSocketInterface.getDefaultScale(), mSocketInterface.getDefaultRoundingMode());
+
+                    // reset values for the next computation
+                    mDlComputationTempPacketSize = 0;
+                    mUlComputationTempFileSize = 0;
+                    mTimeComputeStart = System.nanoTime();
+                    break;
+                default:
+                    divider = BigDecimal.ZERO;
+                    tempPacket = BigDecimal.ZERO;
+                    break;
+            }
+
+            if (divider.compareTo(BigDecimal.ZERO) != 0) {
+                transferRateOps = tempPacket.divide(divider, mSocketInterface.getDefaultScale(), mSocketInterface.getDefaultRoundingMode());
+            }
+        }
+
+        return transferRateOps.multiply(SpeedTestConst.BIT_MULTIPLIER);
+    }
+
+    private BigDecimal calculatePercentage(BigDecimal temporaryPacketSize, BigDecimal totalPacketSize) {
+        BigDecimal percent = BigDecimal.ZERO;
+
+        if (totalPacketSize.compareTo(BigDecimal.ZERO) != 0) {
+            percent = temporaryPacketSize.multiply(SpeedTestConst.PERCENT_MAX).divide(totalPacketSize, mSocketInterface.getDefaultScale(), mSocketInterface.getDefaultRoundingMode());
+        }
+
+        return percent;
+    }
+
+    private SpeedTestReport createSpeedTestReport(SpeedTestMode mode, BigDecimal temporaryPacketSize, BigDecimal totalPacketSize, BigDecimal transferRateOps, BigDecimal percent, long currentTime) {
+        return new SpeedTestReport(mode, percent.floatValue(), mTimeStart, currentTime, temporaryPacketSize.longValueExact(), totalPacketSize.longValueExact(), transferRateOps, transferRateOps.multiply(SpeedTestConst.BIT_MULTIPLIER), 1);
+    }
+
 
     /**
      * Check setup time depending on elapsed time.
