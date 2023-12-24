@@ -933,36 +933,25 @@ public class SpeedTestTask {
      * @throws IOException mSocket io exception
      */
     private int writeFlushSocket(final byte[] data) throws IOException {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        int status;
 
-        final ExecutorService executor = Executors.newSingleThreadExecutor();
-
-        @SuppressWarnings("unchecked") final Future<Integer> future = executor.submit(new Callable() {
-
-            /**
-             * execute sequential write/flush task.
-             *
-             * @return status
-             */
-            public Integer call() {
+        try {
+            status = executor.submit(() -> {
                 try {
                     mSocket.getOutputStream().write(data);
                     mSocket.getOutputStream().flush();
+                    return 0;
                 } catch (IOException e) {
                     return -1;
                 }
-                return 0;
-            }
-        });
-        int status;
-        try {
-            status = future.get(mSocketInterface.getSocketTimeout(), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            future.cancel(true);
+            }).get(mSocketInterface.getSocketTimeout(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException | InterruptedException | ExecutionException e) {
             status = -1;
-        } catch (InterruptedException | ExecutionException e) {
-            status = -1;
+        } finally {
+            executor.shutdownNow();
         }
-        executor.shutdownNow();
+
         return status;
     }
 
