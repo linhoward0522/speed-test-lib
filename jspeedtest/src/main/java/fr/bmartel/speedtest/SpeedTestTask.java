@@ -1109,116 +1109,139 @@ public class SpeedTestTask {
      * @param password ftp password
      */
     public void startFtpDownload(final String uri, final String user, final String password) {
-
         mSpeedTestMode = SpeedTestMode.DOWNLOAD;
+        mErrorDispatched = false;
+        mForceCloseSocket = false;
 
         try {
             final URL url = new URL(uri);
-
-            mErrorDispatched = false;
-            mForceCloseSocket = false;
 
             if (mReadExecutorService == null || mReadExecutorService.isShutdown()) {
                 mReadExecutorService = Executors.newSingleThreadExecutor();
             }
 
-            mReadExecutorService.execute(new Runnable() {
+            mReadExecutorService.execute(() -> {
+                final FTPClient ftpclient = new FTPClient();
 
-                @Override
-                public void run() {
+                try {
+                    setupFtpConnection(ftpclient, url, user, password);
 
-                    final FTPClient ftpclient = new FTPClient();
+                    performFtpDownload(ftpclient, url);
 
-                    try {
-                        ftpclient.connect(url.getHost(), url.getPort() != -1 ? url.getPort() : 21);
-                        ftpclient.login(user, password);
-                        if (mSocketInterface.getFtpMode() == FtpMode.PASSIVE) {
-                            ftpclient.enterLocalPassiveMode();
-                        } else {
-                            ftpclient.enterLocalActiveMode();
-                        }
-                        ftpclient.setFileType(FTP.BINARY_FILE_TYPE);
+                    handleFtpDownloadCompletion();
 
-                        mDownloadTemporaryPacketSize = 0;
-                        mDlComputationTempPacketSize = 0;
-
-                        mTimeStart = System.nanoTime();
-                        mTimeComputeStart = System.nanoTime();
-
-                        mTimeEnd = 0;
-
-                        if (mRepeatWrapper.isFirstDownload()) {
-                            mRepeatWrapper.setFirstDownloadRepeat(false);
-                            mRepeatWrapper.setStartDate(mTimeStart);
-                        }
-
-                        mDownloadPckSize = new BigDecimal(getFileSize(ftpclient, url.getPath()));
-
-                        if (mRepeatWrapper.isRepeatDownload()) {
-                            mRepeatWrapper.updatePacketSize(mDownloadPckSize);
-                        }
-
-                        mFtpInputstream = ftpclient.retrieveFileStream(url.getPath());
-
-                        if (mFtpInputstream != null) {
-
-                            final byte[] bytesArray = new byte[SpeedTestConst.READ_BUFFER_SIZE];
-
-                            int read;
-                            while ((read = mFtpInputstream.read(bytesArray)) != -1) {
-
-                                mDownloadTemporaryPacketSize += read;
-                                mDlComputationTempPacketSize += read;
-
-                                if (mRepeatWrapper.isRepeatDownload()) {
-                                    mRepeatWrapper.updateTempPacketSize(read);
-                                }
-
-                                if (!mReportInterval) {
-                                    final SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
-
-                                    for (int i = 0; i < mListenerList.size(); i++) {
-                                        mListenerList.get(i).onProgress(report.getProgressPercent(), report);
-                                    }
-                                }
-
-                                if (mDownloadTemporaryPacketSize == mDownloadPckSize.longValueExact()) {
-                                    break;
-                                }
-                            }
-
-                            mFtpInputstream.close();
-
-                            mTimeEnd = System.nanoTime();
-
-                            mReportInterval = false;
-                            final SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
-
-                            for (int i = 0; i < mListenerList.size(); i++) {
-                                mListenerList.get(i).onCompletion(report);
-                            }
-
-                        } else {
-                            mReportInterval = false;
-                            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, "cant create stream " + "from uri " + uri + " with reply code : " + ftpclient.getReplyCode());
-                        }
-
-                        if (!mRepeatWrapper.isRepeatDownload()) {
-                            closeExecutors();
-                        }
-
-                    } catch (IOException e) {
-                        //e.printStackTrace();
-                        mReportInterval = false;
-                        catchError(e.getMessage());
-                    } finally {
-                        mErrorDispatched = false;
-                        disconnectFtp(ftpclient);
-                    }
+                } catch (IOException e) {
+                    mReportInterval = false;
+                    catchError(e.getMessage());
+                } finally {
+                    mErrorDispatched = false;
+                    disconnectFtp(ftpclient);
                 }
             });
         } catch (MalformedURLException e) {
             SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, SpeedTestError.MALFORMED_URI, e.getMessage());
+        }
+    }
+
+    private void setupFtpConnection(FTPClient ftpclient, URL url, String user, String password) throws IOException {
+        ftpclient.connect(url.getHost(), url.getPort() != -1 ? url.getPort() : 21);
+        ftpclient.login(user, password);
+
+        if (mSocketInterface.getFtpMode() == FtpMode.PASSIVE) {
+            ftpclient.enterLocalPassiveMode();
+        } else {
+            ftpclient.enterLocalActiveMode();
+        }
+
+        ftpclient.setFileType(FTP.BINARY_FILE_TYPE);
+
+        initializeDownloadCounters();
+
+        mDownloadPckSize = new BigDecimal(getFileSize(ftpclient, url.getPath()));
+
+        if (mRepeatWrapper.isRepeatDownload()) {
+            mRepeatWrapper.updatePacketSize(mDownloadPckSize);
+        }
+    }
+
+    private void initializeDownloadCounters() {
+        mDownloadTemporaryPacketSize = 0;
+        mDlComputationTempPacketSize = 0;
+        mTimeStart = System.nanoTime();
+        mTimeComputeStart = System.nanoTime();
+        mTimeEnd = 0;
+
+        if (mRepeatWrapper.isFirstDownload()) {
+            mRepeatWrapper.setFirstDownloadRepeat(false);
+            mRepeatWrapper.setStartDate(mTimeStart);
+        }
+    }
+
+    private void performFtpDownload(FTPClient ftpclient, URL url) throws IOException {
+        mFtpInputstream = ftpclient.retrieveFileStream(url.getPath());
+
+        if (mFtpInputstream != null) {
+            final byte[] bytesArray = new byte[SpeedTestConst.READ_BUFFER_SIZE];
+            int read;
+
+            while ((read = mFtpInputstream.read(bytesArray)) != -1) {
+                updateDownloadCounters(read);
+
+                if (!mReportInterval) {
+                    dispatchProgressUpdate();
+                }
+
+                if (mDownloadTemporaryPacketSize == mDownloadPckSize.longValueExact()) {
+                    break;
+                }
+            }
+
+            mFtpInputstream.close();
+        } else {
+            mReportInterval = false;
+            SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, "cant create stream " + "from uri " + url + " with reply code : " + ftpclient.getReplyCode());
+        }
+    }
+
+    private void updateDownloadCounters(int read) {
+        mDownloadTemporaryPacketSize += read;
+        mDlComputationTempPacketSize += read;
+
+        if (mRepeatWrapper.isRepeatDownload()) {
+            mRepeatWrapper.updateTempPacketSize(read);
+        }
+    }
+
+    private void handleFtpDownloadCompletion() {
+        mTimeEnd = System.nanoTime();
+        mReportInterval = false;
+        final SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
+
+        for (int i = 0; i < mListenerList.size(); i++) {
+            mListenerList.get(i).onCompletion(report);
+        }
+
+        if (!mRepeatWrapper.isRepeatDownload()) {
+            closeExecutors();
+        }
+    }
+
+    private void dispatchProgressUpdate() {
+        final SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
+
+        for (int i = 0; i < mListenerList.size(); i++) {
+            mListenerList.get(i).onProgress(report.getProgressPercent(), report);
+        }
+    }
+
+    private void disconnectFtp(FTPClient ftpclient) {
+        if (ftpclient.isConnected()) {
+            try {
+                ftpclient.logout();
+                ftpclient.disconnect();
+            } catch (IOException e) {
+                // handle exception
+            }
         }
     }
 
