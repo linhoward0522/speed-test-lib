@@ -585,103 +585,157 @@ public class SpeedTestTask {
      * @String hostname hostname to reach
      */
     private void startSocketDownloadTask(final String protocol, final String hostname) {
-
-        mDownloadTemporaryPacketSize = 0;
-        mDlComputationTempPacketSize = 0;
+        initializeDownloadCounters();
 
         try {
-            final HttpFrame httpFrame = new HttpFrame();
+            HttpFrame httpFrame = receiveHttpFrame();
 
-            final HttpStates httFrameState = httpFrame.decodeFrame(mSocket.getInputStream());
+            checkHttpFrameError(httpFrame);
 
-            SpeedTestUtils.checkHttpFrameError(mForceCloseSocket, mListenerList, httFrameState);
+            checkHttpHeaderError(httpFrame);
 
-            final HttpStates httpHeaderState = httpFrame.parseHeader(mSocket.getInputStream());
-            SpeedTestUtils.checkHttpHeaderError(mForceCloseSocket, mListenerList, httpHeaderState);
+            handleHttpResponse(httpFrame, protocol, hostname);
 
-            if (httpFrame.getStatusCode() == SpeedTestConst.HTTP_OK &&
-                    httpFrame.getReasonPhrase().equalsIgnoreCase("ok")) {
-
-                SpeedTestUtils.checkHttpContentLengthError(mForceCloseSocket,
-                        mListenerList, httpFrame);
-
-                mDownloadPckSize = new BigDecimal(httpFrame.getContentLength());
-
-                if (mRepeatWrapper.isRepeatDownload()) {
-                    mRepeatWrapper.updatePacketSize(mDownloadPckSize);
-                }
-
-                mTimeStart = System.nanoTime();
-                mTimeComputeStart = System.nanoTime();
-                mTimeEnd = 0;
-
-                if (mRepeatWrapper.isFirstDownload()) {
-                    mRepeatWrapper.setFirstDownloadRepeat(false);
-                    mRepeatWrapper.setStartDate(mTimeStart);
-                }
-
-                downloadReadingLoop();
-                mTimeEnd = System.nanoTime();
-
-                closeSocket();
-
-                mReportInterval = false;
-
-                if (!mRepeatWrapper.isRepeatDownload()) {
-                    closeExecutors();
-                }
-
-                final SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
-
-                for (int i = 0; i < mListenerList.size(); i++) {
-                    mListenerList.get(i).onCompletion(report);
-                }
-
-            } else if ((httpFrame.getStatusCode() == 301 ||
-                    httpFrame.getStatusCode() == 302 ||
-                    httpFrame.getStatusCode() == 307) &&
-                    httpFrame.getHeaders().containsKey("location")) {
-                // redirect to Location
-                final String location = httpFrame.getHeaders().get("location");
-
-                if (location.charAt(0) == '/') {
-                    mReportInterval = false;
-                    finishTask();
-                    startDownloadRequest(protocol + "://" + hostname + location);
-                } else {
-                    mReportInterval = false;
-                    finishTask();
-                    startDownloadRequest(location);
-                }
-            } else {
-
-                mReportInterval = false;
-
-                for (int i = 0; i < mListenerList.size(); i++) {
-                    mListenerList.get(i).onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code " +
-                            httpFrame.getStatusCode());
-                }
-
-                finishTask();
-            }
-
-        } catch (
-                SocketTimeoutException e
-        ) {
-            mReportInterval = false;
-            SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, e.getMessage());
-            mTimeEnd = System.nanoTime();
-            closeSocket();
-            closeExecutors();
-        } catch (IOException |
-                 InterruptedException e
-        ) {
-            mReportInterval = false;
-            catchError(e.getMessage());
+        } catch (SocketTimeoutException e) {
+            handleSocketTimeoutException(e);
+        } catch (IOException | InterruptedException e) {
+            handleIOException(e);
         }
 
+        resetErrorDispatchFlag();
+    }
+
+    private void initializeDownloadCounters() {
+        mDownloadTemporaryPacketSize = 0;
+        mDlComputationTempPacketSize = 0;
+    }
+
+    private HttpFrame receiveHttpFrame() throws IOException {
+        HttpFrame httpFrame = new HttpFrame();
+        httpFrame.decodeAndParseFrame(mSocket.getInputStream());
+        return httpFrame;
+    }
+
+    private void checkHttpFrameError(HttpFrame httpFrame) {
+        HttpStates httFrameState = httpFrame.getHttFrameState();
+        SpeedTestUtils.checkHttpFrameError(mForceCloseSocket, mListenerList, httFrameState);
+    }
+
+    private void checkHttpHeaderError(HttpFrame httpFrame) {
+        HttpStates httpHeaderState = httpFrame.parseHeader(mSocket.getInputStream());
+        SpeedTestUtils.checkHttpHeaderError(mForceCloseSocket, mListenerList, httpHeaderState);
+    }
+
+    private void handleHttpResponse(HttpFrame httpFrame, String protocol, String hostname) throws IOException, InterruptedException {
+        if (httpFrame.getStatusCode() == SpeedTestConst.HTTP_OK &&
+                httpFrame.getReasonPhrase().equalsIgnoreCase("ok")) {
+
+            handleOkResponse(httpFrame);
+
+        } else if ((httpFrame.getStatusCode() == 301 ||
+                httpFrame.getStatusCode() == 302 ||
+                httpFrame.getStatusCode() == 307) &&
+                httpFrame.getHeaders().containsKey("location")) {
+
+            handleRedirectResponse(httpFrame, protocol, hostname);
+
+        } else {
+
+            handleErrorResponse(httpFrame);
+
+        }
+    }
+
+    private void handleOkResponse(HttpFrame httpFrame) {
+        checkHttpContentLengthError(httpFrame);
+
+        mDownloadPckSize = new BigDecimal(httpFrame.getContentLength());
+
+        handleDownloadStart();
+
+        downloadReadingLoop();
+
+        handleDownloadCompletion();
+    }
+
+    private void handleRedirectResponse(HttpFrame httpFrame, String protocol, String hostname) {
+        String location = httpFrame.getHeaders().get("location");
+
+        if (location.charAt(0) == '/') {
+            redirectToLocation(protocol + "://" + hostname + location);
+        } else {
+            redirectToLocation(location);
+        }
+    }
+
+    private void handleErrorResponse(HttpFrame httpFrame) {
+        mReportInterval = false;
+
+        for (ISpeedTestListener listener : mListenerList) {
+            listener.onError(SpeedTestError.INVALID_HTTP_RESPONSE, "Error status code " +
+                    httpFrame.getStatusCode());
+        }
+
+        finishTask();
+    }
+
+    private void redirectToLocation(String location) {
+        mReportInterval = false;
+        finishTask();
+        startDownloadRequest(location);
+    }
+
+    private void handleSocketTimeoutException(SocketTimeoutException e) {
+        mReportInterval = false;
+        SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, e.getMessage());
+        handleTaskEnd();
+    }
+
+    private void handleIOException(IOException e) {
+        mReportInterval = false;
+        catchError(e.getMessage());
+    }
+
+    private void resetErrorDispatchFlag() {
         mErrorDispatched = false;
     }
+
+    private void handleDownloadStart() {
+        mTimeStart = System.nanoTime();
+        mTimeComputeStart = System.nanoTime();
+        mTimeEnd = 0;
+
+        handleRepeatDownloadStart();
+    }
+
+    private void handleDownloadCompletion() {
+        mTimeEnd = System.nanoTime();
+        closeSocket();
+
+        mReportInterval = false;
+
+        handleTaskEnd();
+
+        SpeedTestReport report = getReport(SpeedTestMode.DOWNLOAD);
+
+        for (ISpeedTestListener listener : mListenerList) {
+            listener.onCompletion(report);
+        }
+    }
+
+    private void handleTaskEnd() {
+        if (!mRepeatWrapper.isRepeatDownload()) {
+            closeExecutors();
+        }
+    }
+
+    private void handleRepeatDownloadStart() {
+        if (mRepeatWrapper.isFirstDownload()) {
+            mRepeatWrapper.setFirstDownloadRepeat(false);
+            mRepeatWrapper.setStartDate(mTimeStart);
+        }
+    }
+
 
     private void finishTask() {
         closeSocket();
