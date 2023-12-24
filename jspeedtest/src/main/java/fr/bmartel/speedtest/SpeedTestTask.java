@@ -873,36 +873,39 @@ public class SpeedTestTask {
     }
 
 
-
     /**
      * Write download request to server host.
      *
      * @param data HTTP request to send to initiate download process
      */
     private void writeDownload(final byte[] data) {
-
-        connectAndExecuteTask(new Runnable() {
-            @Override
-            public void run() {
-
-                if (mSocket != null && !mSocket.isClosed()) {
-
-                    try {
-                        if ((mSocket.getOutputStream() != null) && (writeFlushSocket(data) != 0)) {
-                            throw new SocketTimeoutException();
-                        }
-                    } catch (SocketTimeoutException e) {
-                        SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, SpeedTestConst.SOCKET_WRITE_ERROR);
-                        closeSocket();
-                        closeExecutors();
-                    } catch (IOException e) {
-                        SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
-                        closeExecutors();
+        connectAndExecuteTask(() -> {
+            if (mSocket != null && !mSocket.isClosed()) {
+                try {
+                    OutputStream outputStream = mSocket.getOutputStream();
+                    if (outputStream != null && writeFlushSocket(data) != 0) {
+                        throw new SocketTimeoutException();
                     }
+                } catch (SocketTimeoutException e) {
+                    handleSocketTimeoutException(e);
+                } catch (IOException e) {
+                    handleIOException(e);
                 }
             }
         }, true, 0);
     }
+
+    private void handleSocketTimeoutException(SocketTimeoutException e) {
+        SpeedTestUtils.dispatchSocketTimeout(mForceCloseSocket, mListenerList, SpeedTestConst.SOCKET_WRITE_ERROR);
+        closeSocket();
+        closeExecutors();
+    }
+
+    private void handleIOException(IOException e) {
+        SpeedTestUtils.dispatchError(mSocketInterface, mForceCloseSocket, mListenerList, e.getMessage());
+        closeExecutors();
+    }
+
 
     /**
      * logout & disconnect FTP client.
